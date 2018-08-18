@@ -63,7 +63,7 @@ class YOLOv3:
                                          shape=[batch, width, height, channels])
 
             layers = {}
-            previous_layer = self.inputs
+            layers[-1] = self.inputs
 
             for index, block in enumerate(self.cfg_blocks[1:]):   
 
@@ -91,7 +91,7 @@ class YOLOv3:
 
                     with tf.variable_scope('conv_{}'.format(index)) as scope:
                         # print(layers[index-1])
-                        output = slim.conv2d(inputs=previous_layer,
+                        output = slim.conv2d(inputs=layers[index-1],
                                              num_outputs=filters,
                                              kernel_size=[size, size],
                                              stride=stride,
@@ -100,9 +100,6 @@ class YOLOv3:
                                              normalizer_fn=normalizer_fn,
                                              normalizer_params=normalizer_params)
 
-                    previous_layer = output
-
-                
                 # ====================== shortcut layer ======================
                 elif block['name'] == 'shortcut':
 
@@ -113,8 +110,6 @@ class YOLOv3:
                     # So the number of filters will not change
                     output = tf.add(layers[index - 1], layers[index + from_layer], 
                                     name='shortcut_{}'.format(index))
-
-                    previous_layer = output
 
                 # ====================== route layer ======================
                 elif block['name'] == 'route':
@@ -138,10 +133,7 @@ class YOLOv3:
                                            axis=-1,
                                            name='route_{}_{}'.format(start, end))
                     else:
-                        output = layers[index + start]
-
-                    previous_layer = output
-                        
+                        output = layers[index + start]                        
 
                 # ====================== upsample layer ======================
                 elif block['name'] == 'upsample':
@@ -161,8 +153,6 @@ class YOLOv3:
                                                         align_corners=True, 
                                                         method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
 
-                    previous_layer = output
-
                 # ====================== yolo layer ======================
                 elif block['name'] == 'yolo':
                     mask = block['mask'].split(',')
@@ -175,7 +165,5 @@ class YOLOv3:
 
                     no_of_classes = int(block['classes'])
 
-                                  
-     
-                print(output)
+                # Finally, add this layer output to list
                 layers[index] = output
