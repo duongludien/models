@@ -148,9 +148,9 @@ class YOLOv3:
                     stride = int(block['stride'])
 
                     # Just increase size
-                    old_width = tf.shape(layers[index-1])[1]
-                    old_height = tf.shape(layers[index-1])[2]
-                    depth = tf.shape(layers[index-1])[3]
+                    old_shape = layers[index-1].get_shape().as_list()
+                    old_width = old_shape[1]
+                    old_height = old_shape[2]
                     
                     new_width = old_width * stride
                     new_height = old_height * stride
@@ -165,18 +165,17 @@ class YOLOv3:
 
                 # ====================== yolo layer ======================
                 elif block['name'] == 'yolo':
-                    # mask = block['mask'].split(',')
-                    # mask = [int(x) for x in mask]
+                    mask = block['mask'].split(',')
+                    mask = [int(x) for x in mask]
 
-                    # anchors = block['anchors'].split(',')
-                    # anchors = [int(x) for x in anchors]
-                    # anchors = [(anchors[i], anchors[i+1]) for i in range(0, len(anchors), 2)]
-                    # anchors = [anchors[i] for i in mask]
+                    anchors = block['anchors'].split(',')
+                    anchors = [int(x) for x in anchors]
+                    anchors = [(anchors[i], anchors[i+1]) for i in range(0, len(anchors), 2)]
+                    anchors = [anchors[i] for i in mask]
 
-                    # no_of_classes = int(block['classes'])
+                    no_of_classes = int(block['classes'])
 
-                    # yolo = YoloLayer(anchors, no_of_classes)
-                    # sequential.add_module(name='yolo_{}'.format(index), module=yolo)                
+                                  
      
                 print(output)
                 layers[index] = output
