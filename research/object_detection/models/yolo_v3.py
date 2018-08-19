@@ -73,10 +73,8 @@ class YOLOv3:
                     try:
                         batch_normalize = int(block['batch_normalize'])
                         normalizer_fn = slim.batch_norm
-                        normalizer_params = {'is_training': is_training}
                     except:
                         normalizer_fn = None
-                        normalizer_params = None
 
                     filters = int(block['filters'])
                     size = int(block['size'])
@@ -89,16 +87,19 @@ class YOLOv3:
                     else:
                         pad = 'VALID'
 
+                    """
+                    If a `normalizer_fn` is provided (such as `batch_norm`), it is then applied. 
+                    Otherwise, if `normalizer_fn` is None and a `biases_initializer` is provided 
+                    then a `biases` variable would be created and added the activations.
+                    """
                     with tf.variable_scope('conv_{}'.format(index)) as scope:
-                        # print(layers[index-1])
                         output = slim.conv2d(inputs=layers[index-1],
                                              num_outputs=filters,
                                              kernel_size=[size, size],
                                              stride=stride,
                                              padding=pad,
                                              activation_fn=tf.nn.leaky_relu,
-                                             normalizer_fn=normalizer_fn,
-                                             normalizer_params=normalizer_params)
+                                             normalizer_fn=normalizer_fn)
 
                 # ====================== shortcut layer ======================
                 elif block['name'] == 'shortcut':
@@ -165,5 +166,69 @@ class YOLOv3:
 
                     no_of_classes = int(block['classes'])
 
+                    output = self.transform_features_map(layers[index-1], 416, anchors, no_of_classes)
+                    print(output)
+
                 # Finally, add this layer output to list
                 layers[index] = output
+
+    def transform_features_map(self, features_map, input_dimension, anchors, no_of_classes):
+        # Input shape may be [1, 13, 13, 255]
+
+        features_map_shape = features_map.get_shape().as_list()
+
+        batch = features_map_shape[0]
+        grid_size = features_map_shape[1]
+        no_of_anchors = len(anchors)   
+        stride = input_dimension // grid_size     
+
+        with tf.variable_scope('yolo') as scope:
+            # Reshape to [1, 13, 13, 3, 85]
+            features_map = tf.reshape(features_map, [batch, grid_size, grid_size, no_of_anchors, 5 + no_of_classes])
+            # Reshape to [1, 13 x 13 x 3, 85]
+            features_map = tf.reshape(features_map, [batch, grid_size * grid_size * no_of_anchors, 5 + no_of_classes])
+
+            # Transform bx, by
+            bx_by = features_map[:, :, 0:2]
+            bx_by = tf.sigmoid(bx_by)
+
+            grid = tf.range(start=0, limit=grid_size, delta=1, dtype=tf.float32)
+            x_offset, y_offset = tf.meshgrid(grid, grid)
+            x_offset = tf.reshape(x_offset, [-1, 1])
+            y_offset = tf.reshape(y_offset, [-1, 1])
+            x_offset = tf.tile(x_offset, [no_of_anchors, 1])
+            y_offset = tf.tile(y_offset, [no_of_anchors, 1])
+            offset = tf.concat([x_offset, y_offset], axis=1)
+            offset = tf.reshape(offset, [1, -1, 2])
+
+            transformed_bx_by = tf.add(bx_by, offset)
+            transformed_bx_by = tf.multiply(transformed_bx_by, stride, name='bx_by')
+            # print(transformed_bx_by)
+
+            # Transform bh, bw
+            bh_bw = features_map[:, :, 2:4]
+            anchors = [(a[0]/stride, a[1]/stride) for a in anchors]
+            anchors = tf.tile(anchors, [grid_size * grid_size, 1])
+            transformed_bh_bw = tf.multiply(tf.exp(bh_bw), anchors)
+            transformed_bh_bw = tf.multiply(transformed_bh_bw, stride, name='bh_bw')
+            # print(transformed_bh_bw)
+            
+            # Transform object confidence
+            p  = features_map[:, :, 4]
+            transformed_p  = tf.sigmoid(p)
+            transformed_p = tf.reshape(transformed_p, [batch, -1, 1], name='p')
+            # print(transformed_p)
+
+            # Transform class scores
+            class_scores = features_map[:, :, 5:]
+            transformed_class_scores = tf.sigmoid(class_scores, name='class_scores')
+            # print(transformed_class_scores)
+
+            transformed_features_map = tf.concat([transformed_bx_by,
+                                                  transformed_bh_bw,
+                                                  transformed_p,
+                                                  transformed_class_scores], 
+                                                  name='transformed_feature_map', 
+                                                  axis=-1)
+
+        return transformed_features_map
