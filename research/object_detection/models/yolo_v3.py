@@ -99,6 +99,7 @@ class YOLOv3:
                             initializer=tf.truncated_normal(shape=[size, size, previous_filters, filters],
                                                             stddev=1e-1,
                                                             dtype=tf.float32),
+                            trainable=True,
                             name='weights')
 
                         output = tf.nn.conv2d(input=layers[index - 1],
