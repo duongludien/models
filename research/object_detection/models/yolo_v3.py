@@ -1,4 +1,5 @@
 import tensorflow as tf
+import numpy as np
 
 
 class YOLOv3:
@@ -93,7 +94,7 @@ class YOLOv3:
                     else:
                         pad = 'VALID'
 
-                    with tf.variable_scope('conv_{}'.format(index)) as scope:
+                    with tf.variable_scope('conv_{}'.format(index)):
 
                         weights = tf.get_variable(
                             initializer=tf.truncated_normal(shape=[size, size, previous_filters, filters],
@@ -107,7 +108,7 @@ class YOLOv3:
                                               strides=[1, stride, stride, 1],
                                               padding=pad,
                                               name='conv')
-                        print(output)
+                        # print(output)
 
                         if batch_normalize:
 
@@ -140,7 +141,7 @@ class YOLOv3:
                                                                scale=gamma_scale,
                                                                variance_epsilon=1e-05,
                                                                name='batch_normalize')
-                            print(output)
+                            # print(output)
 
                         else:
 
@@ -153,13 +154,12 @@ class YOLOv3:
                             output = tf.nn.bias_add(value=output,
                                                     bias=bias,
                                                     name='add_bias')
-                            print(output)
+                            # print(output)
 
                         if activation == 'leaky':
                             output = tf.nn.leaky_relu(features=output,
                                                       alpha=0.1,
                                                       name='leaky_relu')
-                            # print(output)
 
                         self.weights_list.append(weights)
 
@@ -213,7 +213,7 @@ class YOLOv3:
                     new_width = old_width * stride
                     new_height = old_height * stride
 
-                    with tf.variable_scope('upsample_{}'.format(index)) as scope:
+                    with tf.variable_scope('upsample_{}'.format(index)):
                         output = tf.image.resize_images(images=layers[index - 1],
                                                         size=[new_width, new_height],
                                                         align_corners=True,
@@ -236,7 +236,7 @@ class YOLOv3:
                     self.outputs.append(output)
 
                 # Finally, add this layer output to list
-                print(output)
+                # print(output)
                 layers[index] = output
 
     def transform_features_map(self, features_map, anchors, no_of_classes):
@@ -250,7 +250,7 @@ class YOLOv3:
         input_dimension = int(self.cfg_blocks[0]['width'])
         stride = input_dimension // grid_size
 
-        with tf.variable_scope('yolo') as scope:
+        with tf.variable_scope('yolo'):
             # Reshape to [1, 13, 13, 3, 85]
             features_map = tf.reshape(features_map, [batch, grid_size, grid_size, no_of_anchors, 5 + no_of_classes])
             # Reshape to [1, 13 x 13 x 3, 85]
@@ -302,5 +302,32 @@ class YOLOv3:
         return transformed_features_map
 
     def load_weights(self):
+        file = open(self.weights_path, 'rb')
+
+        # The first 5 values are header information
+        # 1. Major version number
+        # 2. Minor Version Number
+        # 3. Subversion number
+        # 4,5. Images seen by the network (during training)
+        header = np.fromfile(file, dtype=np.int32, count=5)
+        print('Major version: %d' % header[0])
+        print('Minor version: %d' % header[1])
+        print('Subversion: %d' % header[2])
+        print('Images seen by the network (during training): %d %d' % (header[3], header[4]))
+
+        weights = np.fromfile(file, dtype=np.float32)
+        pointer = 0
+
+        file.close()
+
+        assign_ops = []
         for i in range(len(self.weights_list)):
-            print(self.weights_list[i].name)
+            node = self.weights_list[i]
+            node_shape = self.weights_list[i].get_shape().as_list()
+            no_of_params = np.prod(node_shape)
+
+            values = np.reshape(weights[pointer:pointer+no_of_params], node_shape)
+            pointer += no_of_params
+            assign_ops.append(tf.assign(node, values))
+
+        return assign_ops
