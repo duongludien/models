@@ -3,6 +3,7 @@ import numpy as np
 
 
 class YOLOv3:
+
     def __init__(self, cfg_path, weights_path=None):
         super(YOLOv3, self).__init__()
 
