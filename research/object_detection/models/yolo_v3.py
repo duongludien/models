@@ -8,6 +8,7 @@ class YOLOv3:
         super(YOLOv3, self).__init__()
 
         # load config from file
+        self.net_info = None
         self.cfg_path = cfg_path
         self.cfg_blocks = []
         self.load_config()
@@ -16,11 +17,15 @@ class YOLOv3:
         self.graph = tf.Graph()
         self.inputs = None
         self.weights_list = []
-        self.outputs = []
+        self.outputs = None
         self.define_graph()
 
         # load weights from file
-        self.weights_path = weights_path
+        # self.weights_path = weights_path
+        if weights_path is not None:
+            self.load_weights_ops = self.load_weights(weights_path)
+        else:
+            self.load_weights_ops = None
 
     def load_config(self):
         """
@@ -57,15 +62,16 @@ class YOLOv3:
                 key, value = line.split('=')
                 block[key.rstrip()] = value.lstrip()
         self.cfg_blocks.append(block)
+        self.net_info = self.cfg_blocks[0]
 
     def define_graph(self):
 
         with self.graph.as_default():
 
-            batch_size = int(self.cfg_blocks[0]['batch'])
-            width = int(self.cfg_blocks[0]['width'])
-            height = int(self.cfg_blocks[0]['height'])
-            channels = int(self.cfg_blocks[0]['channels'])
+            batch_size = int(self.net_info['batch'])
+            width = int(self.net_info['width'])
+            height = int(self.net_info['height'])
+            channels = int(self.net_info['channels'])
 
             self.inputs = tf.placeholder(dtype=tf.float32,
                                          name='input_images',
@@ -75,6 +81,7 @@ class YOLOv3:
             layers = {-1: self.inputs}
             previous_filters = channels
 
+            # self.cfg_blocks[0] is net_info, so we start with 1
             for index, block in enumerate(self.cfg_blocks[1:]):
 
                 # ====================== convolutional layer ======================
@@ -147,8 +154,8 @@ class YOLOv3:
                         else:
 
                             bias = tf.get_variable(initializer=tf.truncated_normal(shape=[filters],
-                                                   stddev=1e-1,
-                                                   dtype=tf.float32),
+                                                                                   stddev=1e-1,
+                                                                                   dtype=tf.float32),
                                                    name='bias')
                             self.weights_list.append(bias)
 
@@ -234,7 +241,11 @@ class YOLOv3:
 
                     output = self.transform_features_map(layers[index - 1], anchors, no_of_classes)
 
-                    self.outputs.append(output)
+                    if self.outputs is not None:
+                        self.outputs = tf.concat(values=[self.outputs, output],
+                                                 axis=1)
+                    else:
+                        self.outputs = output
 
                 # Finally, add this layer output to list
                 # print(output)
@@ -248,7 +259,7 @@ class YOLOv3:
         batch = features_map_shape[0]
         grid_size = features_map_shape[1]
         no_of_anchors = len(anchors)
-        input_dimension = int(self.cfg_blocks[0]['width'])
+        input_dimension = int(self.net_info['width'])
         stride = input_dimension // grid_size
 
         with tf.variable_scope('yolo'):
@@ -302,8 +313,8 @@ class YOLOv3:
 
         return transformed_features_map
 
-    def load_weights(self):
-        file = open(self.weights_path, 'rb')
+    def load_weights(self, weights_path):
+        file = open(weights_path, 'rb')
 
         # The first 5 values are header information
         # 1. Major version number
@@ -321,14 +332,86 @@ class YOLOv3:
 
         file.close()
 
-        assign_ops = []
-        for i in range(len(self.weights_list)):
-            node = self.weights_list[i]
-            node_shape = self.weights_list[i].get_shape().as_list()
-            no_of_params = np.prod(node_shape)
+        with self.graph.as_default():
+            with tf.variable_scope('load_weights'):
+                assign_ops = []
+                for i in range(len(self.weights_list)):
+                    weights_shape = self.weights_list[i].get_shape().as_list()
+                    no_of_params = np.prod(weights_shape)
 
-            values = np.reshape(weights[pointer:pointer+no_of_params], node_shape)
-            pointer += no_of_params
-            assign_ops.append(tf.assign(node, values))
+                    values = np.reshape(weights[pointer:pointer + no_of_params], weights_shape)
+                    pointer += no_of_params
+                    assign_op = tf.assign(self.weights_list[i], values)
+
+                    assign_ops.append(assign_op)
 
         return assign_ops
+
+    def non_max_suppression(self, object_confidence_threshold=0.25):
+        batch_size = int(self.net_info['batch'])
+
+        with self.graph.as_default():
+            with tf.variable_scope(name_or_scope='non_max_suppression'):
+
+                result_existed = False
+
+                for batch in range(batch_size):
+
+                    output = self.outputs[batch]
+
+                    # Apply threshold to this batch
+                    object_confidence = output[:, 4]
+                    object_confidence_mask = object_confidence > object_confidence_threshold
+                    output = tf.boolean_mask(output, object_confidence_mask)
+                    # print('Thresholded:', output)
+
+                    object_confidence = tf.expand_dims(output[:, 4], axis=-1, name='object_confidence')
+                    # print('Object confidence:', object_confidence)
+
+                    # Convert bx, by, bh, bw to top-left and right-bottom
+                    bx = output[:, 0]
+                    by = output[:, 1]
+                    bh = output[:, 2]
+                    bw = output[:, 3]
+                    top = tf.expand_dims(by - bh / 2,
+                                         axis=-1,
+                                         name='top')
+                    left = tf.expand_dims(bx - bw / 2,
+                                          axis=-1,
+                                          name='left')
+                    right = tf.expand_dims(bx + bw / 2,
+                                           axis=-1,
+                                           name='right')
+                    bottom = tf.expand_dims(by + bh / 2,
+                                            axis=-1,
+                                            name='bottom')
+                    # print('Top:', top)
+                    # print('Left:', left)
+                    # print('Right:', right)
+                    # print('Bottom:', bottom)
+
+                    max_class_scores = tf.reduce_max(output[:, 5:],
+                                                     axis=-1,
+                                                     keepdims=True,
+                                                     name='class_scores')
+                    # print('Max class scores:', max_class_scores)
+
+                    class_indices = tf.cast(tf.argmax(output[:, 5:],
+                                                      axis=-1),
+                                            tf.float32)
+                    class_indices = tf.expand_dims(class_indices, axis=-1, name='class_indices')
+                    # print('Class indices:', class_indices)
+
+                    # Concatenate all values
+                    this_batch_result = tf.concat(values=[left, top, right, bottom, object_confidence, max_class_scores, class_indices],
+                                                  axis=-1)
+                    this_batch_result = tf.expand_dims(this_batch_result, axis=0, name='transformed_predictions')
+
+                    if not result_existed:
+                        result = this_batch_result
+                        result_existed = True
+                    else:
+                        result = tf.concat(values=[result, this_batch_result],
+                                           axis=0,
+                                           name='NMS_result')
+                return result
